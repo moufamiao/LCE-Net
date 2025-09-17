@@ -2,12 +2,13 @@ import os
 import torch
 import torch.nn as nn
 from torchvision import datasets, transforms, models
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, WeightedRandomSampler
 from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
+import numpy as np
 
 # ===== 参数设置 =====
-data_dir = './Potato'
+data_dir = './Patato'
 num_classes = 3
 batch_size = 32
 num_epochs = 50
@@ -29,17 +30,41 @@ aug_transforms = transforms.Compose([
     transforms.Normalize([0.5]*3, [0.5]*3)
 ])
 
-# ===== 加载数据集并划分 =====
+# ===== 加载数据集并划分（固定随机种子） =====
 full_dataset = datasets.ImageFolder(data_dir, transform=data_transforms)
 class_names = full_dataset.classes
 train_size = int(0.8 * len(full_dataset))
 val_size = len(full_dataset) - train_size
-train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+
+# 固定随机种子划分
+generator = torch.Generator().manual_seed(42)
+train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size], generator=generator)
+
+# 设置不同 transform
 train_dataset.dataset.transform = aug_transforms
 val_dataset.dataset.transform = data_transforms
 
+# ===== WeightedRandomSampler (过采样) =====
+# 获取训练集标签
+train_labels = [full_dataset.samples[i][1] for i in train_dataset.indices]
+
+# 计算每个类别的样本数
+class_sample_count = np.bincount(train_labels)
+
+# 每个类别的权重 = 1 / 样本数
+weights = 1. / class_sample_count
+samples_weight = [weights[label] for label in train_labels]
+
+# 定义采样器
+sampler = WeightedRandomSampler(
+    weights=samples_weight,
+    num_samples=len(samples_weight),  # 与训练集一样多
+    replacement=True
+)
+
+# DataLoader
 dataloaders = {
-    'Train': DataLoader(train_dataset, batch_size=batch_size, shuffle=True),
+    'Train': DataLoader(train_dataset, batch_size=batch_size, sampler=sampler),
     'Valid': DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 }
 
@@ -107,6 +132,7 @@ optimizer = torch.optim.Adam([
     {'params': model.classifier.parameters(), 'lr': 5e-4}
 ])
 criterion = nn.CrossEntropyLoss()
+
 def main():
     # ===== 训练与验证循环 =====
     best_val_acc = 0.0
